@@ -1,0 +1,89 @@
+﻿package bot
+
+import (
+	"fmt"
+	"go-notification-tg-bot/internal/alteg"
+	"strings"
+	"time"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+)
+
+// Sender wraps the Telegram bot and provides messaging helpers.
+type Sender struct {
+	api    *tgbotapi.BotAPI
+	chatID int64
+}
+
+// NewSender creates a new Sender for the given bot and chat.
+func NewSender(api *tgbotapi.BotAPI, chatID int64) *Sender {
+	return &Sender{api: api, chatID: chatID}
+}
+
+// SendActivities formats and sends the list of available activities.
+func (s *Sender) SendActivities(activities []alteg.Activity) error {
+	return s.send(formatActivitiesMessage(activities))
+}
+
+// SendError sends an error notification message.
+func (s *Sender) SendError(err error) error {
+	return s.send(fmt.Sprintf("⚠️ Error fetching activities: %s", err.Error()))
+}
+
+// send delivers a Markdown-formatted message to the configured chat.
+func (s *Sender) send(text string) error {
+	msg := tgbotapi.NewMessage(s.chatID, text)
+	msg.ParseMode = tgbotapi.ModeMarkdown
+	msg.DisableWebPagePreview = true
+	_, err := s.api.Send(msg)
+	return err
+}
+
+// formatActivitiesMessage builds a Telegram message from a list of available activities.
+func formatActivitiesMessage(activities []alteg.Activity) string {
+	if len(activities) == 0 {
+		return "❌ No available activities found."
+	}
+
+	var sb strings.Builder
+	sb.WriteString("✅ *Available activities:*\n\n")
+
+	for _, a := range activities {
+		// Parse date to display it nicely.
+		t, err := time.Parse("2006-01-02 15:04:05", a.Date)
+		dateStr := a.Date
+		timeStr := ""
+		if err == nil {
+			dateStr = t.Format("2006-01-02")
+			timeStr = t.Format("15:04")
+		}
+
+		sb.WriteString(fmt.Sprintf(
+			"📅 *Date:* %s\n"+
+				"⏰ *Time:* %s\n"+
+				"🏷 *Title:* %s\n"+
+				"👤 *Coach:* %s\n"+
+				"🪑 *Available places:* %d\n"+
+				"🔗 [Book now](%s)\n\n",
+			dateStr,
+			timeStr,
+			escapeMarkdown(a.Service.Title),
+			escapeMarkdown(a.Staff.Name),
+			a.AvailablePlaces(),
+			alteg.ActivityURL(a.ID),
+		))
+	}
+
+	return sb.String()
+}
+
+// escapeMarkdown escapes Telegram MarkdownV1 special characters.
+func escapeMarkdown(s string) string {
+	replacer := strings.NewReplacer(
+		"_", "\\_",
+		"*", "\\*",
+		"`", "\\`",
+		"[", "\\[",
+	)
+	return replacer.Replace(s)
+}
