@@ -5,15 +5,16 @@ import (
 	"fmt"
 	"go-notification-tg-bot/internal/alteg"
 	"go-notification-tg-bot/internal/bot"
+	"go-notification-tg-bot/internal/storage"
 	"log"
 	"strings"
 	"time"
 )
 
-// Notifier polls the Alteg API and sends Telegram notifications when availability changes.
 type Notifier struct {
 	client   *alteg.Client
 	sender   *bot.Sender
+	storage  *storage.Storage
 	interval time.Duration
 
 	lastKey      string // last observed set of available activities
@@ -21,10 +22,11 @@ type Notifier struct {
 }
 
 // New creates a new Notifier.
-func New(client *alteg.Client, sender *bot.Sender, interval time.Duration) *Notifier {
+func New(client *alteg.Client, sender *bot.Sender, store *storage.Storage, interval time.Duration) *Notifier {
 	return &Notifier{
 		client:   client,
 		sender:   sender,
+		storage:  store,
 		interval: interval,
 	}
 }
@@ -44,7 +46,19 @@ func (n *Notifier) Run() {
 
 // poll fetches activities and sends a notification if anything has changed.
 func (n *Notifier) poll() {
-	activities, err := n.client.FetchAvailableActivities()
+	from, till := searchDateRange()
+
+	// Seed the last-known state from DB for the current date window on every poll,
+	// so that restarts and range shifts are handled correctly.
+	if saved, err := n.storage.LoadBetween(from, till); err != nil {
+		log.Printf("warning: could not load saved activities from storage: %v", err)
+	} else if len(saved) > 0 && n.lastKey == "" {
+		n.lastKey = activitiesKey(saved)
+		log.Printf("seeded %d activities from storage for range [%s, %s]",
+			len(saved), from.Format("2006-01-02"), till.Format("2006-01-02"))
+	}
+
+	activities, err := n.client.FetchAvailableActivities(from, till)
 	if err != nil {
 		log.Printf("error fetching activities: %v", err)
 
@@ -78,6 +92,11 @@ func (n *Notifier) poll() {
 		log.Printf("failed to send activities notification: %v", err)
 	}
 	n.lastKey = currentKey
+
+	// Persist the latest known activities so they can be restored on the next startup.
+	if err := n.storage.Save(activities); err != nil {
+		log.Printf("warning: could not save activities to storage: %v", err)
+	}
 }
 
 // activitiesKey builds a comparable string key from a list of activities.
@@ -102,4 +121,14 @@ func (n *Notifier) renewToken() {
 	n.client.UpdateToken(newToken)
 	n.lastWasError = false
 	log.Println("bearer token updated successfully")
+}
+
+// searchDateRange returns the [from, till] window used for each API poll.
+// from — today's date.
+// till — the first day of next month shifted two months forward (i.e. roughly 3 months ahead).
+func searchDateRange() (from, till time.Time) {
+	now := time.Now()
+	from = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	till = time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location()).AddDate(0, 2, 0)
+	return
 }

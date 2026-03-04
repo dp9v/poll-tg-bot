@@ -11,10 +11,14 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o bot .
 
 # Stage 2: minimal runtime image
-FROM scratch
+FROM alpine:3.21
 
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /app/bot /bot
+
+# Directory for persistent storage (activities.db)
+RUN mkdir -p /data
+
+VOLUME ["/data"]
 
 ENTRYPOINT ["/bot"]
 

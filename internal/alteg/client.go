@@ -80,19 +80,14 @@ func (c *Client) UpdateToken(newToken string) {
 	c.bearerToken = newToken
 }
 
-// FetchAvailableActivities calls the Alteg API and returns only activities that have free spots.
-func (c *Client) FetchAvailableActivities() ([]Activity, error) {
-	now := time.Now()
-
-	from := now.Format("2006-01-02")
-
-	// till = 1st day of next month + 2 months ahead
-	firstOfNextMonth := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
-	till := firstOfNextMonth.AddDate(0, 2, 0).Format("2006-01-02")
+// FetchAvailableActivities calls the Alteg API and returns only activities that have free spots
+// within the given [from, till] date range.
+func (c *Client) FetchAvailableActivities(from, till time.Time) ([]Activity, error) {
+	const dateLayout = "2006-01-02"
 
 	params := url.Values{}
-	params.Set("from", from)
-	params.Set("till", till)
+	params.Set("from", from.Format(dateLayout))
+	params.Set("till", till.Format(dateLayout))
 	params.Add("service_ids[]", strconv.Itoa(ServiceID))
 	params.Add("staff_ids[]", strconv.Itoa(StaffID))
 

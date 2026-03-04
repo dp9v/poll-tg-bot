@@ -6,4 +6,9 @@
       - BOT_TOKEN=${BOT_TOKEN}
       - CHAT_ID=${CHAT_ID}
       - BEARER_TOKEN=${BEARER_TOKEN}
+      - STORAGE_PATH=/data/tgbot.db
+    volumes:
+      - bot_data:/data
 
+volumes:
+  bot_data:

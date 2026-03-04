@@ -5,6 +5,7 @@ import (
 	"go-notification-tg-bot/internal/bot"
 	"go-notification-tg-bot/internal/config"
 	"go-notification-tg-bot/internal/notifier"
+	"go-notification-tg-bot/internal/storage"
 	"log"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -24,7 +25,12 @@ func main() {
 
 	altegClient := alteg.NewClient(cfg.BearerToken)
 	sender := bot.NewSender(api, cfg.ChatID)
-	n := notifier.New(altegClient, sender, cfg.Interval)
+	store, err := storage.New(cfg.StoragePath)
+	if err != nil {
+		log.Fatalf("failed to open storage: %v", err)
+	}
+	defer store.Close()
+	n := notifier.New(altegClient, sender, store, cfg.Interval)
 
 	n.Run()
 }
