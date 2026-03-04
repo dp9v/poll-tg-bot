@@ -1,6 +1,7 @@
 ﻿services:
   bot:
-    build: .
+    image: ghcr.io/dp9v/poll-tg-bot:04-03-2026-1
+    container_name: poll-tg-bot
     restart: unless-stopped
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
@@ -8,7 +9,9 @@
       - BEARER_TOKEN=${BEARER_TOKEN}
       - STORAGE_PATH=/data/tgbot.db
     volumes:
-      - bot_data:/data
-
-volumes:
-  bot_data:
+      - ./data:/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
