@@ -70,3 +70,4 @@ SELECT * FROM activities ORDER BY date DESC LIMIT 20;
 |---------|-----|
 | Container exits immediately | Check `docker compose logs` for the missing env variable |
 | `401 Unauthorized` from Alteg | Bearer token expired — reply with a new one when the bot asks via Telegram |
+
