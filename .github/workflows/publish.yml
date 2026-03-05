@@ -21,7 +21,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Run tests
-        run: go test ./...
+        run: go test ./... -v
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -50,7 +50,7 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/${{ secrets.USERNAME }}/go-notification-tg-bot:${{ steps.version_tag.outputs.version }}
-            ghcr.io/${{ secrets.USERNAME }}/go-notification-tg-bot:latest
+            ghcr.io/${{ secrets.USERNAME }}/poll-tg-bot:${{ steps.version_tag.outputs.version }}
+            ghcr.io/${{ secrets.USERNAME }}/poll-tg-bot:latest
 
 

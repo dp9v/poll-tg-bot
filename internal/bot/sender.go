@@ -35,6 +35,11 @@ func (s *Sender) SendError(err error) error {
 	return s.send(fmt.Sprintf("⚠️ Error fetching activities: %s", err.Error()))
 }
 
+// SendStartup sends a notification that the bot has started successfully.
+func (s *Sender) SendStartup(interval time.Duration) error {
+	return s.send(fmt.Sprintf("✅ *Bot started successfully.*\nPolling every `%s`.", interval))
+}
+
 // send delivers a Markdown-formatted message to the configured chat.
 func (s *Sender) send(text string) error {
 	msg := tgbotapi.NewMessage(s.chatID, text)

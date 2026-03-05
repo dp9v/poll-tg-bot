@@ -32,6 +32,10 @@ func New(client *alteg.Client, sender *bot.Sender, store *storage.Storage, inter
 // Run starts the polling loop. It polls once immediately, then on every interval tick.
 // It blocks until the process is terminated.
 func (n *Notifier) Run() {
+	if err := n.sender.SendStartup(n.interval); err != nil {
+		log.Printf("failed to send startup notification: %v", err)
+	}
+
 	n.poll()
 
 	ticker := time.NewTicker(n.interval)
