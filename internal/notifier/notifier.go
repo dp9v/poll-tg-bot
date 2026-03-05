@@ -101,6 +101,15 @@ func (n *Notifier) poll() {
 	}
 }
 
+// ListenCommands starts the Telegram command/button handler in the current goroutine.
+// Call it in a separate goroutine alongside Run.
+func (n *Notifier) ListenCommands() {
+	n.sender.ListenCommands(func() ([]alteg.Activity, error) {
+		from, till := searchDateRange()
+		return n.client.FetchActivities(from, till)
+	})
+}
+
 // renewToken blocks until the user sends a new bearer token via Telegram,
 // then updates the API client with the new token.
 func (n *Notifier) renewToken() {

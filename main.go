@@ -29,8 +29,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to open storage: %v", err)
 	}
-	defer store.Close()
+	defer func(store *storage.Storage) {
+		_ = store.Close()
+	}(store)
 	n := notifier.New(altegClient, sender, store, cfg.Interval)
 
+	go n.ListenCommands()
 	n.Run()
 }

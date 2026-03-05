@@ -35,9 +35,35 @@ func (s *Sender) SendError(err error) error {
 	return s.send(fmt.Sprintf("⚠️ Error fetching activities: %s", err.Error()))
 }
 
-// SendStartup sends a notification that the bot has started successfully.
+// SendStartup sends a notification that the bot has started successfully
+// and attaches a persistent reply keyboard with the main action button.
 func (s *Sender) SendStartup(interval time.Duration) error {
-	return s.send(fmt.Sprintf("✅ *Bot started successfully.*\nPolling every `%s`.", interval))
+	msg := tgbotapi.NewMessage(s.chatID,
+		fmt.Sprintf("✅ *Bot started successfully.*\nPolling every `%s`.", interval))
+	msg.ParseMode = tgbotapi.ModeMarkdown
+	msg.ReplyMarkup = mainKeyboard()
+	_, err := s.api.Send(msg)
+	return err
+}
+
+// SendAvailableActivities sends the list of activities that currently have free spots.
+func (s *Sender) SendAvailableActivities(activities []alteg.Activity) error {
+	var available []alteg.Activity
+	for _, a := range activities {
+		if a.AvailablePlaces() > 0 {
+			available = append(available, a)
+		}
+	}
+	return s.send(formatActivitiesMessage("📋 *Available activities:*", available))
+}
+
+// mainKeyboard returns the persistent reply keyboard shown to the user.
+func mainKeyboard() tgbotapi.ReplyKeyboardMarkup {
+	return tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton(BtnShowActivities),
+		),
+	)
 }
 
 // send delivers a Markdown-formatted message to the configured chat.
