@@ -2,12 +2,10 @@
 
 import (
 	"errors"
-	"fmt"
 	"go-notification-tg-bot/internal/alteg"
 	"go-notification-tg-bot/internal/bot"
 	"go-notification-tg-bot/internal/storage"
 	"log"
-	"strings"
 	"time"
 )
 
@@ -48,17 +46,7 @@ func (n *Notifier) Run() {
 func (n *Notifier) poll() {
 	from, till := searchDateRange()
 
-	// Seed the last-known state from DB for the current date window on every poll,
-	// so that restarts and range shifts are handled correctly.
-	if saved, err := n.storage.LoadBetween(from, till); err != nil {
-		log.Printf("warning: could not load saved activities from storage: %v", err)
-	} else if len(saved) > 0 && n.lastKey == "" {
-		n.lastKey = activitiesKey(saved)
-		log.Printf("seeded %d activities from storage for range [%s, %s]",
-			len(saved), from.Format("2006-01-02"), till.Format("2006-01-02"))
-	}
-
-	activities, err := n.client.FetchAvailableActivities(from, till)
+	activities, err := n.client.FetchActivities(from, till)
 	if err != nil {
 		log.Printf("error fetching activities: %v", err)
 
@@ -81,32 +69,32 @@ func (n *Notifier) poll() {
 	// Error streak is resolved.
 	n.lastWasError = false
 
-	currentKey := activitiesKey(activities)
-	if currentKey == n.lastKey {
-		log.Println("no changes in available activities, skipping notification")
-		return
+	var oldActivities []alteg.Activity
+	if saved, err := n.storage.LoadBetween(from, till); err != nil {
+		log.Printf("warning: could not load saved activities from storage: %v", err)
+		oldActivities = activities
+	} else {
+		oldActivities = saved
 	}
 
-	log.Printf("activities changed, sending notification (%d available)", len(activities))
-	if err := n.sender.SendActivities(activities); err != nil {
-		log.Printf("failed to send activities notification: %v", err)
+	added, removed := calculateDiff(oldActivities, activities)
+	log.Printf("activities changed: +%d added, -%d removed", len(added), len(removed))
+
+	if len(added) > 0 {
+		if err := n.sender.SendNewActivities(added); err != nil {
+			log.Printf("failed to send new activities notification: %v", err)
+		}
 	}
-	n.lastKey = currentKey
+	if len(removed) > 0 {
+		if err := n.sender.SendRemovedActivities(removed); err != nil {
+			log.Printf("failed to send removed activities notification: %v", err)
+		}
+	}
 
 	// Persist the latest known activities so they can be restored on the next startup.
 	if err := n.storage.Save(activities); err != nil {
 		log.Printf("warning: could not save activities to storage: %v", err)
 	}
-}
-
-// activitiesKey builds a comparable string key from a list of activities.
-// It encodes each activity's ID + available places so we can detect any change.
-func activitiesKey(activities []alteg.Activity) string {
-	parts := make([]string, 0, len(activities))
-	for _, a := range activities {
-		parts = append(parts, fmt.Sprintf("%d:%d", a.ID, a.AvailablePlaces()))
-	}
-	return strings.Join(parts, ",")
 }
 
 // renewToken blocks until the user sends a new bearer token via Telegram,
@@ -131,4 +119,49 @@ func searchDateRange() (from, till time.Time) {
 	from = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	till = time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location()).AddDate(0, 2, 0)
 	return
+}
+
+func calculateDiff(old, new []alteg.Activity) (added, removed []alteg.Activity) {
+	oldByID := make(map[int]alteg.Activity, len(old))
+	newByID := make(map[int]alteg.Activity, len(new))
+	allIDs := make(map[int]struct{}, len(old)+len(new))
+
+	for _, a := range old {
+		oldByID[a.ID] = a
+		allIDs[a.ID] = struct{}{}
+	}
+	for _, a := range new {
+		newByID[a.ID] = a
+		allIDs[a.ID] = struct{}{}
+	}
+
+	for id := range allIDs {
+		previous, inOld := oldByID[id]
+		current, inNew := newByID[id]
+
+		switch {
+		case !inOld && inNew:
+			// Brand-new activity — notify only if it has free spots.
+			if current.AvailablePlaces() > 0 {
+				added = append(added, current)
+			}
+		case inOld && !inNew:
+			// Activity disappeared from API entirely — notify if it previously had free spots.
+			if previous.AvailablePlaces() > 0 {
+				removed = append(removed, previous)
+			}
+		default:
+			oldPlaces := previous.AvailablePlaces()
+			newPlaces := current.AvailablePlaces()
+			if newPlaces > oldPlaces {
+				// More spots opened up — notify.
+				added = append(added, current)
+			} else if newPlaces < oldPlaces && newPlaces == 0 {
+				// All spots are taken — notify as removed.
+				removed = append(removed, current)
+			}
+		}
+	}
+
+	return added, removed
 }

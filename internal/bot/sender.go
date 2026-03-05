@@ -20,9 +20,14 @@ func NewSender(api *tgbotapi.BotAPI, chatID int64) *Sender {
 	return &Sender{api: api, chatID: chatID}
 }
 
-// SendActivities formats and sends the list of available activities.
-func (s *Sender) SendActivities(activities []alteg.Activity) error {
-	return s.send(formatActivitiesMessage(activities))
+// SendNewActivities formats and sends newly appeared or grown activities.
+func (s *Sender) SendNewActivities(activities []alteg.Activity) error {
+	return s.send(formatActivitiesMessage("🆕 *New / more places available:*", activities))
+}
+
+// SendRemovedActivities formats and sends activities that lost spots or disappeared.
+func (s *Sender) SendRemovedActivities(activities []alteg.Activity) error {
+	return s.send(formatActivitiesMessage("❌ *Places taken / activity removed:*", activities))
 }
 
 // SendError sends an error notification message.
@@ -39,14 +44,14 @@ func (s *Sender) send(text string) error {
 	return err
 }
 
-// formatActivitiesMessage builds a Telegram message from a list of available activities.
-func formatActivitiesMessage(activities []alteg.Activity) string {
+// formatActivitiesMessage builds a Telegram message from a list of activities with the given header.
+func formatActivitiesMessage(header string, activities []alteg.Activity) string {
 	if len(activities) == 0 {
 		return "❌ No available activities found."
 	}
 
 	var sb strings.Builder
-	sb.WriteString("✅ *Available activities:*\n\n")
+	sb.WriteString(header + "\n\n")
 
 	for _, a := range activities {
 		// Parse date to display it nicely.
@@ -54,7 +59,7 @@ func formatActivitiesMessage(activities []alteg.Activity) string {
 		dateStr := a.Date
 		timeStr := ""
 		if err == nil {
-			dateStr = t.Format("2006-01-02")
+			dateStr = t.Format("2006-01-02 (Mon)")
 			timeStr = t.Format("15:04")
 		}
 

@@ -15,10 +15,10 @@ import (
 var ErrUnauthorized = errors.New("bearer token is expired or invalid (401)")
 
 const (
-	apiURL    = "https://n1338118.alteg.io/api/v1/activity/777474/search"
-	CompanyID = 777474
-	ServiceID = 12995896
-	StaffID   = 2811495
+	defaultAPIURL = "https://n1338118.alteg.io/api/v1/activity/777474/search"
+	CompanyID     = 777474
+	ServiceID     = 12995896
+	StaffID       = 2811495
 
 	httpTimeout = 30 * time.Second
 )
@@ -65,6 +65,7 @@ func ActivityURL(activityID int) string {
 type Client struct {
 	bearerToken string
 	http        *http.Client
+	apiURL      string
 }
 
 // NewClient creates a new Alteg API client.
@@ -72,7 +73,14 @@ func NewClient(bearerToken string) *Client {
 	return &Client{
 		bearerToken: bearerToken,
 		http:        &http.Client{Timeout: httpTimeout},
+		apiURL:      defaultAPIURL,
 	}
+}
+
+// WithBaseURL overrides the API base URL. Useful for tests.
+func (c *Client) WithBaseURL(u string) *Client {
+	c.apiURL = u
+	return c
 }
 
 // UpdateToken replaces the bearer token used for API requests.
@@ -80,9 +88,9 @@ func (c *Client) UpdateToken(newToken string) {
 	c.bearerToken = newToken
 }
 
-// FetchAvailableActivities calls the Alteg API and returns only activities that have free spots
+// FetchActivities calls the Alteg API and returns all activities (including fully booked ones)
 // within the given [from, till] date range.
-func (c *Client) FetchAvailableActivities(from, till time.Time) ([]Activity, error) {
+func (c *Client) FetchActivities(from, till time.Time) ([]Activity, error) {
 	const dateLayout = "2006-01-02"
 
 	params := url.Values{}
@@ -91,7 +99,7 @@ func (c *Client) FetchAvailableActivities(from, till time.Time) ([]Activity, err
 	params.Add("service_ids[]", strconv.Itoa(ServiceID))
 	params.Add("staff_ids[]", strconv.Itoa(StaffID))
 
-	reqURL := apiURL + "?" + params.Encode()
+	reqURL := c.apiURL + "?" + params.Encode()
 
 	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
 	if err != nil {
@@ -123,11 +131,5 @@ func (c *Client) FetchAvailableActivities(from, till time.Time) ([]Activity, err
 		return nil, fmt.Errorf("API returned success=false")
 	}
 
-	var available []Activity
-	for _, a := range sr.Data {
-		if a.AvailablePlaces() > 0 {
-			available = append(available, a)
-		}
-	}
-	return available, nil
+	return sr.Data, nil
 }
