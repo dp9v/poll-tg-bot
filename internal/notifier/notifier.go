@@ -96,8 +96,10 @@ func (n *Notifier) poll() {
 	}
 
 	// Persist the latest known activities so they can be restored on the next startup.
-	if err := n.storage.Save(activities); err != nil {
-		log.Printf("warning: could not save activities to storage: %v", err)
+	for _, batch := range [][]alteg.Activity{removed, added} {
+		if err := n.storage.Save(batch); err != nil {
+			log.Printf("warning: could not save activities to storage: %v", err)
+		}
 	}
 }
 
@@ -161,6 +163,7 @@ func calculateDiff(old, new []alteg.Activity) (added, removed []alteg.Activity) 
 		case inOld && !inNew:
 			// Activity disappeared from API entirely — notify if it previously had free spots.
 			if previous.AvailablePlaces() > 0 {
+				previous.RecordsCount = previous.Capacity
 				removed = append(removed, previous)
 			}
 		default:

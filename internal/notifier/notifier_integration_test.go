@@ -240,6 +240,29 @@ func TestPoll_ActivityDisappears(t *testing.T) {
 		"expected a 'removed' notification when activity disappears")
 }
 
+// TestPoll_ActivityDisappears_NotificationOnlyOnce verifies that when an activity
+// stored in the DB with free places stops coming from the API, the "removed"
+// notification is sent exactly once, not on every subsequent poll.
+func TestPoll_ActivityDisappears_NotificationOnlyOnce(t *testing.T) {
+	n, altegS, tg := setupNotifier(t)
+
+	// First poll: activity has free spots → "new" notification
+	altegS.set([]alteg.Activity{makeActivity(1, 10, 5)})
+	n.poll()
+	require.Len(t, tg.captured(), 1)
+
+	// Second poll: activity is gone → "removed" notification
+	altegS.set([]alteg.Activity{})
+	n.poll()
+	require.Len(t, tg.captured(), 2)
+
+	// Third and fourth polls: activity still absent → no additional notifications
+	n.poll()
+	n.poll()
+
+	assert.Len(t, tg.captured(), 2, "removed notification must be sent only once when activity stays gone")
+}
+
 // TestPoll_ActivityDisappears_WasFullyBooked verifies that when a fully-booked
 // activity disappears, no notification is sent (nothing was available anyway).
 func TestPoll_ActivityDisappears_WasFullyBooked(t *testing.T) {
