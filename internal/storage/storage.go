@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"go-notification-tg-bot/internal/alteg"
+	"go-notification-tg-bot/internal/storage/migrations"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -29,14 +30,14 @@ func New(dsn string) (*Storage, error) {
 		return nil, fmt.Errorf("open postgres db: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping postgres db: %w", err)
 	}
 
-	if err := migrate(db); err != nil {
+	if err := migrations.Up(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate postgres db: %w", err)
 	}
@@ -49,22 +50,6 @@ func (s *Storage) Close() error {
 	return s.db.Close()
 }
 
-// migrate creates the activities table if it does not exist.
-func migrate(db *sql.DB) error {
-	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS activities (
-			id            BIGINT  PRIMARY KEY,
-			date          TEXT    NOT NULL,
-			capacity      INTEGER NOT NULL,
-			records_count INTEGER NOT NULL,
-			staff_id      BIGINT  NOT NULL,
-			staff_name    TEXT    NOT NULL,
-			service_id    BIGINT  NOT NULL,
-			service_title TEXT    NOT NULL
-		)
-	`)
-	return err
-}
 
 // Save upserts the given activities into the database.
 // Existing rows are updated if their available places changed; new rows are inserted.

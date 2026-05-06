@@ -23,6 +23,7 @@ A Telegram bot that polls the [Alteg](https://alteg.io) platform every 5 minutes
 │   ├── config/      # Environment-based config
 │   ├── notifier/    # Polling loop & diff logic
 │   └── storage/     # PostgreSQL persistence
+│       └── migrations/  # Embedded SQL schema migrations (goose)
 └── docs/
     ├── deploy.md    # Deploy & push instructions
     └── requirements/
@@ -42,6 +43,31 @@ A Telegram bot that polls the [Alteg](https://alteg.io) platform every 5 minutes
 ## Documentation
 
 - [Deploy instructions](docs/deploy.md) — how to push a new image and run it on a server
+
+## Database migrations
+
+Schema changes live in [`internal/storage/migrations/`](internal/storage/migrations) as plain
+`.sql` files using the [goose](https://github.com/pressly/goose) format
+(`-- +goose Up` / `-- +goose Down`). They are embedded into the binary via
+`//go:embed` and applied automatically on every start in `storage.New`, so
+deployments don't need any extra steps.
+
+To add a new migration, create a file with the next sequence number, e.g.
+`00002_add_user_email.sql`:
+
+```sql
+-- +goose Up
+-- +goose StatementBegin
+ALTER TABLE activities ADD COLUMN comment TEXT;
+-- +goose StatementEnd
+
+-- +goose Down
+-- +goose StatementBegin
+ALTER TABLE activities DROP COLUMN comment;
+-- +goose StatementEnd
+```
+
+Files are applied in lexicographic order, so always pad the numeric prefix.
 
 ## Environment variables
 
