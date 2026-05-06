@@ -139,11 +139,10 @@ func makeActivity(id, capacity, records int) alteg.Activity {
 	}
 }
 
-// setupPipeline wires up the full loader â†’ notifier pipeline against fresh
+// setupPipeline wires up the full loader -> notifier pipeline against fresh
 // stubs and a throwaway Postgres container. The returned tick function runs
 // one full cycle: Loader.LoadNear (fetch + save) followed by Notifier.Check
-// (diff + send). This mirrors what happens in production when the loader
-// signals the notifier via the NearLoaded channel.
+// (diff + send).
 func setupPipeline(t *testing.T) (tick func(), altegS *altegStub, tg *tgStub) {
 	t.Helper()
 
@@ -164,7 +163,7 @@ func setupPipeline(t *testing.T) (tick func(), altegS *altegStub, tg *tgStub) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	ld := loader.New(client, store, sender, time.Hour, time.Hour)
-	nf := New(store, sender, ld.NearLoaded(), 0)
+	nf := New(store, sender, 0)
 
 	tick = func() {
 		ld.LoadNear()

@@ -1,4 +1,4 @@
-﻿// Package loader is responsible for keeping the local PostgreSQL cache in
+// Package loader is responsible for keeping the local PostgreSQL cache in
 // sync with the upstream Alteg API. It does not send any activity-availability
 // notifications — that is the notifier's job. The loader only:
 //
@@ -30,11 +30,6 @@ type Loader struct {
 	nearInterval     time.Duration
 	longTermInterval time.Duration
 
-	// nearLoaded is signalled (non-blockingly) after every successful save
-	// of the near-window data. Buffered to 1: if the consumer is busy, the
-	// signal is coalesced — there is no point in waking it up twice in a row.
-	nearLoaded chan struct{}
-
 	mu       sync.Mutex
 	nearErr  bool // last near poll ended with an error?
 	renewing bool // serializes token renewal across both schedulers
@@ -53,15 +48,8 @@ func New(
 		sender:           sender,
 		nearInterval:     nearInterval,
 		longTermInterval: longTermInterval,
-		nearLoaded:       make(chan struct{}, 1),
 	}
 }
-
-// NearLoaded returns a read-only channel that fires every time the near
-// window has been successfully refreshed in the database. Subscribers should
-// drain the channel and consult the database for the latest state — each
-// signal means "something might have changed", not "here is what changed".
-func (l *Loader) NearLoaded() <-chan struct{} { return l.nearLoaded }
 
 // Run starts both schedulers and blocks until the process is terminated.
 // Each scheduler polls once immediately, then every interval tick.
@@ -82,11 +70,7 @@ func (l *Loader) Run() {
 func (l *Loader) LoadNear() {
 	from, till := timewindow.Near(time.Now())
 	if l.loadWindow("near", from, till) {
-		// Notify subscribers without blocking.
-		select {
-		case l.nearLoaded <- struct{}{}:
-		default:
-		}
+		log.Println("[near] near window saved successfully")
 	}
 }
 
@@ -141,7 +125,7 @@ func (l *Loader) loadWindow(label string, from, till time.Time) bool {
 		l.clearNearError()
 	}
 
-	if err := l.storage.Save(activities); err != nil {
+	if err := l.storage.SaveWindow(activities, from, till); err != nil {
 		log.Printf("[%s] warning: could not save activities to storage: %v", label, err)
 		return false
 	}
@@ -195,4 +179,3 @@ func (l *Loader) renewToken() {
 	l.clearNearError()
 	log.Println("bearer token updated successfully")
 }
-

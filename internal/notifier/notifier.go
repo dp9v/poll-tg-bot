@@ -1,4 +1,4 @@
-﻿// Package notifier watches the local PostgreSQL cache for activity-availability
+// Package notifier watches the local PostgreSQL cache for activity-availability
 // changes and posts notifications to Telegram. It is fully decoupled from the
 // loader: it never talks to the Alteg API directly. The loader's job is to
 // keep the cache fresh; the notifier's job is to react to changes in that
@@ -9,12 +9,7 @@
 // diffs it against the baseline, sends Telegram messages and updates the
 // baseline.
 //
-// Two trigger sources are supported:
-//
-//   - an event channel (typically wired to Loader.NearLoaded()) that fires
-//     immediately after a successful near-window save;
-//   - a periodic ticker that acts as a safety net so the notifier never
-//     gets stuck waiting on a silent loader.
+// The notifier runs on a periodic ticker that polls the database for changes.
 package notifier
 
 import (
@@ -31,8 +26,7 @@ import (
 type Notifier struct {
 	storage  *storage.Storage
 	sender   *bot.Sender
-	trigger  <-chan struct{}
-	interval time.Duration // safety-net polling interval; <=0 disables it
+	interval time.Duration // polling interval
 
 	previous []alteg.Activity // last observed state (in-memory baseline)
 	seeded   bool
@@ -40,21 +34,15 @@ type Notifier struct {
 
 // New creates a Notifier.
 //
-// trigger may be nil — in that case the notifier relies entirely on the
-// safety-net ticker (and the user must pass a positive interval).
-//
-// interval may be zero — in that case the notifier reacts only to trigger
-// events.
+// interval controls how often the notifier polls the database for changes.
 func New(
 	store *storage.Storage,
 	sender *bot.Sender,
-	trigger <-chan struct{},
 	interval time.Duration,
 ) *Notifier {
 	return &Notifier{
 		storage:  store,
 		sender:   sender,
-		trigger:  trigger,
 		interval: interval,
 	}
 }
@@ -68,20 +56,11 @@ func New(
 func (n *Notifier) Run() {
 	n.seedBaseline()
 
-	var tickerC <-chan time.Time
-	if n.interval > 0 {
-		t := time.NewTicker(n.interval)
-		defer t.Stop()
-		tickerC = t.C
-	}
+	t := time.NewTicker(n.interval)
+	defer t.Stop()
 
-	for {
-		select {
-		case <-n.trigger:
-			n.Check()
-		case <-tickerC:
-			n.Check()
-		}
+	for range t.C {
+		n.Check()
 	}
 }
 
@@ -188,4 +167,3 @@ func calculateDiff(old, current []alteg.Activity) (added, removed []alteg.Activi
 
 	return added, removed
 }
-

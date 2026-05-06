@@ -1,4 +1,4 @@
-﻿package storage
+package storage
 
 import (
 	"context"
@@ -50,7 +50,6 @@ func (s *Storage) Close() error {
 	return s.db.Close()
 }
 
-
 // Save upserts the given activities, along with the staff, categories and
 // services they reference, into the database in a single transaction.
 //
@@ -61,7 +60,20 @@ func (s *Storage) Save(activities []alteg.Activity) error {
 	if len(activities) == 0 {
 		return nil
 	}
+	return s.saveInTx(activities, nil, nil)
+}
 
+// SaveWindow replaces all activities in the given date range [from, to] with
+// the provided set. Activities that previously existed in the window but are
+// absent from the new batch are deleted. This is the correct method when
+// syncing a complete time window from the API.
+func (s *Storage) SaveWindow(activities []alteg.Activity, from, to time.Time) error {
+	return s.saveInTx(activities, &from, &to)
+}
+
+// saveInTx performs the actual upsert (and optional window-based delete) in a
+// single transaction.
+func (s *Storage) saveInTx(activities []alteg.Activity, from, to *time.Time) error {
 	// Deduplicate referenced metadata so we touch each row at most once.
 	staffByID := make(map[int]alteg.Staff)
 	servicesByID := make(map[int]alteg.Service)
@@ -95,6 +107,13 @@ func (s *Storage) Save(activities []alteg.Activity) error {
 	}
 	if err := upsertActivities(tx, activities); err != nil {
 		return fmt.Errorf("upsert activities: %w", err)
+	}
+
+	// Delete activities that are in the window but not in the new batch.
+	if from != nil && to != nil {
+		if err := deleteStaleActivities(tx, activities, *from, *to); err != nil {
+			return fmt.Errorf("delete stale activities: %w", err)
+		}
 	}
 
 	return tx.Commit()
@@ -184,6 +203,9 @@ func upsertStaff(tx *sql.Tx, items map[int]alteg.Staff) error {
 }
 
 func upsertActivities(tx *sql.Tx, activities []alteg.Activity) error {
+	if len(activities) == 0 {
+		return nil
+	}
 	stmt, err := tx.Prepare(`
 		INSERT INTO activities (id, date, capacity, records_count, staff_id, service_id)
 		VALUES ($1, $2, $3, $4, $5, $6)
@@ -208,6 +230,43 @@ func upsertActivities(tx *sql.Tx, activities []alteg.Activity) error {
 		}
 	}
 	return nil
+}
+
+// deleteStaleActivities removes activities within the given date window that
+// are not present in the new batch.
+func deleteStaleActivities(tx *sql.Tx, activities []alteg.Activity, from, to time.Time) error {
+	const layout = "2006-01-02 15:04:05"
+	if len(activities) == 0 {
+		// Delete everything in the window.
+		_, err := tx.Exec(`
+			DELETE FROM activities
+			WHERE date >= $1 AND date <= $2
+		`, from.Format(layout), to.Format(layout))
+		return err
+	}
+
+	// Collect IDs to keep.
+	ids := make([]any, len(activities))
+	placeholders := ""
+	for i, a := range activities {
+		ids[i] = a.ID
+		if i > 0 {
+			placeholders += ","
+		}
+		placeholders += fmt.Sprintf("$%d", i+3)
+	}
+
+	query := fmt.Sprintf(`
+		DELETE FROM activities
+		WHERE date >= $1 AND date <= $2
+		  AND id NOT IN (%s)
+	`, placeholders)
+
+	args := make([]any, 0, 2+len(ids))
+	args = append(args, from.Format(layout), to.Format(layout))
+	args = append(args, ids...)
+	_, err := tx.Exec(query, args...)
+	return err
 }
 
 const selectActivitiesSQL = `

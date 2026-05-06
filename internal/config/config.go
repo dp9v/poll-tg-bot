@@ -10,7 +10,7 @@ import (
 const (
 	defaultNearInterval     = 15 * time.Minute
 	defaultLongTermInterval = 60 * time.Minute
-	defaultPageSize         = 200
+	defaultPageSize         = 300
 )
 
 // Config holds all runtime configuration loaded from environment variables.
@@ -109,4 +109,3 @@ func parsePositiveInt(name string, def int) (int, error) {
 	}
 	return v, nil
 }
-

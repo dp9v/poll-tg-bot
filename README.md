@@ -60,16 +60,17 @@ PostgreSQL, and notifies a Telegram chat when availability changes.
    │  • long-term sched. (default 60m)       │
    │  • token-renewal dialog                 │
    │  • startup / error notifications        │
-   └─────────────┬─────────────────┬─────────┘
-                 │ Save()          │ NearLoaded() chan
-                 ▼                 │
-        ┌────────────────┐         │
-        │  PostgreSQL    │         │
-        └────────┬───────┘         │
-                 │ LoadBetween()   │
-                 ▼                 ▼
+   └─────────────┬───────────────────────────┘
+                 │ Save()
+                 ▼
+        ┌────────────────┐
+        │  PostgreSQL    │
+        └────────┬───────┘
+                 │ LoadBetween()
+                 ▼
         ┌────────────────────────────────────┐
         │           Notifier                 │
+        │  • periodic timer                  │
         │  • in-memory baseline              │
         │  • diff vs cache → +added/-removed │
         │  • Telegram availability messages  │
@@ -77,12 +78,11 @@ PostgreSQL, and notifies a Telegram chat when availability changes.
 ```
 
 The **loader** is the only component that talks to the Alteg API and the only
-writer to the database. The **notifier** never touches the API: it reacts to
-the loader's `NearLoaded` channel (or its own safety-net ticker), reads the
-fresh state from PostgreSQL, diffs it against an in-memory baseline and posts
-Telegram notifications. On startup the notifier seeds its baseline from the
-database so a process restart does not flood the chat with stale "new"
-notifications.
+writer to the database. The **notifier** never touches the API: it runs on
+its own periodic timer, reads the fresh state from PostgreSQL, diffs it
+against an in-memory baseline and posts Telegram notifications. On startup
+the notifier seeds its baseline from the database so a process restart does
+not flood the chat with stale "new" notifications.
 
 ## Quick start (local)
 

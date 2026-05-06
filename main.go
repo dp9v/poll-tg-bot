@@ -38,12 +38,9 @@ func main() {
 	ld := loader.New(altegClient, store, sender, cfg.NearInterval, cfg.LongTermInterval)
 
 	// Notifier: watches the cache and posts diff notifications to Telegram.
-	// Triggered by the loader's NearLoaded events; the interval acts as a safety net.
-	nf := notifier.New(store, sender, ld.NearLoaded(), cfg.NearInterval)
+	nf := notifier.New(store, sender, cfg.NearInterval)
 
 	go nf.ListenCommands()
 	go nf.Run()
 	ld.Run() // blocks
 }
-
-
