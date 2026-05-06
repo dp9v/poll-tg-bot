@@ -19,7 +19,7 @@ A Telegram bot in Go that polls the Alteg platform for available activity slots 
 
 The date window is recalculated on every poll — the bot always looks ~3 months ahead from the current date.
 
-Response example: [search-response-example.json](search-response-example.json)
+Response example: [search-response-example.json](../requests/search-response-example.json)
 
 ---
 

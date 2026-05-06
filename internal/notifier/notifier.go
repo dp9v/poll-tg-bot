@@ -1,180 +1,169 @@
-﻿package notifier
+// Package notifier watches the local PostgreSQL cache for activity-availability
+// changes and posts notifications to Telegram. It is fully decoupled from the
+// loader: it never talks to the Alteg API directly. The loader's job is to
+// keep the cache fresh; the notifier's job is to react to changes in that
+// cache.
+//
+// The notifier maintains a small in-memory baseline of the last observed
+// near-window state. Each "check" reads the current state from storage,
+// diffs it against the baseline, sends Telegram messages and updates the
+// baseline.
+//
+// The notifier runs on a periodic ticker that polls the database for changes.
+package notifier
 
 import (
-	"errors"
+	"log"
+	"time"
+
 	"go-notification-tg-bot/internal/alteg"
 	"go-notification-tg-bot/internal/bot"
 	"go-notification-tg-bot/internal/storage"
-	"log"
-	"time"
+	"go-notification-tg-bot/internal/timewindow"
 )
 
+// Notifier diffs the near-window cache and sends Telegram notifications.
 type Notifier struct {
-	client   *alteg.Client
-	sender   *bot.Sender
 	storage  *storage.Storage
-	interval time.Duration
+	sender   *bot.Sender
+	interval time.Duration // polling interval
 
-	lastKey      string // last observed set of available activities
-	lastWasError bool   // whether the previous poll ended in an error
+	previous []alteg.Activity // last observed state (in-memory baseline)
+	seeded   bool
 }
 
-// New creates a new Notifier.
-func New(client *alteg.Client, sender *bot.Sender, store *storage.Storage, interval time.Duration) *Notifier {
+// New creates a Notifier.
+//
+// interval controls how often the notifier polls the database for changes.
+func New(
+	store *storage.Storage,
+	sender *bot.Sender,
+	interval time.Duration,
+) *Notifier {
 	return &Notifier{
-		client:   client,
-		sender:   sender,
 		storage:  store,
+		sender:   sender,
 		interval: interval,
 	}
 }
 
-// Run starts the polling loop. It polls once immediately, then on every interval tick.
-// It blocks until the process is terminated.
+// Run blocks forever, calling Check whenever a trigger event arrives or the
+// safety-net ticker fires.
+//
+// On the very first call it seeds the in-memory baseline from the database
+// so that a process restart does not flood the chat with "new" notifications
+// for activities the user has already been informed about.
 func (n *Notifier) Run() {
-	if err := n.sender.SendStartup(n.interval); err != nil {
-		log.Printf("failed to send startup notification: %v", err)
-	}
+	n.seedBaseline()
 
-	n.poll()
+	t := time.NewTicker(n.interval)
+	defer t.Stop()
 
-	ticker := time.NewTicker(n.interval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		n.poll()
+	for range t.C {
+		n.Check()
 	}
 }
 
-// poll fetches activities and sends a notification if anything has changed.
-func (n *Notifier) poll() {
-	from, till := searchDateRange()
+// ListenCommands attaches a Telegram command/button handler that answers
+// "what's available right now?" requests by reading directly from the cache.
+// Call it in a separate goroutine alongside Run.
+func (n *Notifier) ListenCommands() {
+	n.sender.ListenCommands(func() ([]alteg.Activity, error) {
+		from, till := timewindow.Near(time.Now())
+		return n.storage.LoadBetweenForService(from, till, trackedServiceID)
+	})
+}
 
-	activities, err := n.client.FetchActivities(from, till)
+// trackedServiceID is the hardcoded service ID that the notifier monitors.
+const trackedServiceID = 12995896
+
+// Check loads the current near-window state from the cache, computes the diff
+// against the in-memory baseline, sends Telegram notifications about any
+// changes and finally updates the baseline. Exposed primarily for tests.
+func (n *Notifier) Check() {
+	from, till := timewindow.Near(time.Now())
+	current, err := n.storage.LoadBetweenForService(from, till, trackedServiceID)
 	if err != nil {
-		log.Printf("error fetching activities: %v", err)
-
-		// Token expired — ask the user for a new one via Telegram.
-		if errors.Is(err, alteg.ErrUnauthorized) {
-			n.renewToken()
-			return
-		}
-
-		if !n.lastWasError {
-			// Send error notification only on the first failure in a row.
-			if sendErr := n.sender.SendError(err); sendErr != nil {
-				log.Printf("failed to send error notification: %v", sendErr)
-			}
-			n.lastWasError = true
-		}
+		log.Printf("notifier: could not load activities from storage: %v", err)
 		return
 	}
 
-	// Error streak is resolved.
-	n.lastWasError = false
-
-	var oldActivities []alteg.Activity
-	if saved, err := n.storage.LoadBetween(from, till); err != nil {
-		log.Printf("warning: could not load saved activities from storage: %v", err)
-		oldActivities = activities
-	} else {
-		oldActivities = saved
-	}
-
-	added, removed := calculateDiff(oldActivities, activities)
-	log.Printf("activities changed: +%d added, -%d removed", len(added), len(removed))
+	added, removed := calculateDiff(n.previous, current)
+	log.Printf("notifier: activities changed: +%d added, -%d removed", len(added), len(removed))
 
 	if len(added) > 0 {
 		if err := n.sender.SendNewActivities(added); err != nil {
-			log.Printf("failed to send new activities notification: %v", err)
+			log.Printf("notifier: failed to send new activities notification: %v", err)
 		}
 	}
 	if len(removed) > 0 {
 		if err := n.sender.SendRemovedActivities(removed); err != nil {
-			log.Printf("failed to send removed activities notification: %v", err)
+			log.Printf("notifier: failed to send removed activities notification: %v", err)
 		}
 	}
 
-	// Persist the latest known activities so they can be restored on the next startup.
-	for _, batch := range [][]alteg.Activity{removed, added} {
-		if err := n.storage.Save(batch); err != nil {
-			log.Printf("warning: could not save activities to storage: %v", err)
-		}
-	}
+	n.previous = current
+	n.seeded = true
 }
 
-// ListenCommands starts the Telegram command/button handler in the current goroutine.
-// Call it in a separate goroutine alongside Run.
-func (n *Notifier) ListenCommands() {
-	n.sender.ListenCommands(func() ([]alteg.Activity, error) {
-		from, till := searchDateRange()
-		return n.client.FetchActivities(from, till)
-	})
-}
-
-// renewToken blocks until the user sends a new bearer token via Telegram,
-// then updates the API client with the new token.
-func (n *Notifier) renewToken() {
-	log.Println("bearer token expired, waiting for new token from Telegram...")
-	newToken := n.sender.TokenDialog()
-	if newToken == "" {
-		log.Println("no token received, will retry on the next poll")
+// seedBaseline preloads the in-memory baseline from storage on startup so
+// the first check after a restart doesn't fire stale notifications.
+func (n *Notifier) seedBaseline() {
+	if n.seeded {
 		return
 	}
-	n.client.UpdateToken(newToken)
-	n.lastWasError = false
-	log.Println("bearer token updated successfully")
+	from, till := timewindow.Near(time.Now())
+	saved, err := n.storage.LoadBetweenForService(from, till, trackedServiceID)
+	if err != nil {
+		log.Printf("notifier: warning — could not seed baseline from storage: %v", err)
+		return
+	}
+	n.previous = saved
+	n.seeded = true
+	log.Printf("notifier: seeded baseline with %d activities", len(saved))
 }
 
-// searchDateRange returns the [from, till] window used for each API poll.
-// from — today's date.
-// till — the first day of next month shifted two months forward (i.e. roughly 3 months ahead).
-func searchDateRange() (from, till time.Time) {
-	now := time.Now()
-	from = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	till = time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location()).AddDate(0, 2, 0)
-	return
-}
-
-func calculateDiff(old, new []alteg.Activity) (added, removed []alteg.Activity) {
+// calculateDiff compares the previous and current activity slices and returns
+// two slices: added (newly available or got more places) and removed (lost
+// availability — either dropped from the cache while having free spots, or
+// became fully booked).
+func calculateDiff(old, current []alteg.Activity) (added, removed []alteg.Activity) {
 	oldByID := make(map[int]alteg.Activity, len(old))
-	newByID := make(map[int]alteg.Activity, len(new))
-	allIDs := make(map[int]struct{}, len(old)+len(new))
+	newByID := make(map[int]alteg.Activity, len(current))
+	allIDs := make(map[int]struct{}, len(old)+len(current))
 
 	for _, a := range old {
 		oldByID[a.ID] = a
 		allIDs[a.ID] = struct{}{}
 	}
-	for _, a := range new {
+	for _, a := range current {
 		newByID[a.ID] = a
 		allIDs[a.ID] = struct{}{}
 	}
 
 	for id := range allIDs {
 		previous, inOld := oldByID[id]
-		current, inNew := newByID[id]
+		actual, inNew := newByID[id]
 
 		switch {
 		case !inOld && inNew:
 			// Brand-new activity — notify only if it has free spots.
-			if current.AvailablePlaces() > 0 {
-				added = append(added, current)
+			if actual.AvailablePlaces() > 0 {
+				added = append(added, actual)
 			}
 		case inOld && !inNew:
-			// Activity disappeared from API entirely — notify if it previously had free spots.
+			// Activity disappeared from the cache — notify if it previously had free spots.
 			if previous.AvailablePlaces() > 0 {
 				previous.RecordsCount = previous.Capacity
 				removed = append(removed, previous)
 			}
 		default:
 			oldPlaces := previous.AvailablePlaces()
-			newPlaces := current.AvailablePlaces()
+			newPlaces := actual.AvailablePlaces()
 			if newPlaces > oldPlaces {
-				// More spots opened up — notify.
-				added = append(added, current)
+				added = append(added, actual)
 			} else if newPlaces < oldPlaces && newPlaces == 0 {
-				// All spots are taken — notify as removed.
-				removed = append(removed, current)
+				removed = append(removed, actual)
 			}
 		}
 	}

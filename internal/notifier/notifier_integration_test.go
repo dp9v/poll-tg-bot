@@ -1,8 +1,8 @@
-﻿package notifier
+package notifier
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,13 +13,17 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"go-notification-tg-bot/internal/alteg"
 	"go-notification-tg-bot/internal/bot"
+	"go-notification-tg-bot/internal/loader"
 	"go-notification-tg-bot/internal/storage"
 )
 
-// ── Telegram stub ────────────────────────────────────────────────────────────
+// -- Telegram stub ------------------------------------------------------------
 
 // tgStub is a minimal Telegram Bot API stub that records sendMessage calls.
 type tgStub struct {
@@ -33,7 +37,7 @@ func newTGStub(t *testing.T) *tgStub {
 	stub := &tgStub{}
 	mux := http.NewServeMux()
 
-	// getMe — required during tgbotapi.NewBotAPI
+	// getMe ï¿½ required during tgbotapi.NewBotAPI
 	mux.HandleFunc("/botTEST_TOKEN/getMe", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -47,7 +51,7 @@ func newTGStub(t *testing.T) *tgStub {
 		})
 	})
 
-	// sendMessage — capture the text
+	// sendMessage ï¿½ capture the text
 	mux.HandleFunc("/botTEST_TOKEN/sendMessage", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		text := r.FormValue("text")
@@ -76,7 +80,7 @@ func (s *tgStub) captured() []string {
 	return out
 }
 
-// ── Alteg API stub ───────────────────────────────────────────────────────────
+// -- Alteg API stub -----------------------------------------------------------
 
 type altegStub struct {
 	mu         sync.Mutex
@@ -119,12 +123,15 @@ func (s *altegStub) setStatus(code int) {
 	s.statusCode = code
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// -- helpers ------------------------------------------------------------------
 
 func makeActivity(id, capacity, records int) alteg.Activity {
+	// Pick a date that is guaranteed to fall within the "near" window
+	// (current week + 2 weeks) regardless of when the test runs.
+	date := time.Now().AddDate(0, 0, 1).Format("2006-01-02") + " 10:00:00"
 	return alteg.Activity{
 		ID:           id,
-		Date:         "2026-04-01 10:00:00",
+		Date:         date,
 		Capacity:     capacity,
 		RecordsCount: records,
 		Staff:        alteg.Staff{ID: 1, Name: "Coach"},
@@ -132,39 +139,75 @@ func makeActivity(id, capacity, records int) alteg.Activity {
 	}
 }
 
-// setupNotifier wires everything together and returns the notifier and the two stubs.
-func setupNotifier(t *testing.T) (*Notifier, *altegStub, *tgStub) {
+// setupPipeline wires up the full loader -> notifier pipeline against fresh
+// stubs and a throwaway Postgres container. The returned tick function runs
+// one full cycle: Loader.LoadNear (fetch + save) followed by Notifier.Check
+// (diff + send).
+func setupPipeline(t *testing.T) (tick func(), altegS *altegStub, tg *tgStub) {
 	t.Helper()
 
 	// Telegram stub
-	tg := newTGStub(t)
+	tg = newTGStub(t)
 	api, err := tgbotapi.NewBotAPIWithAPIEndpoint("TEST_TOKEN", tg.srv.URL+"/bot%s/%s")
 	require.NoError(t, err)
 	sender := bot.NewSender(api, 12345)
 
 	// Alteg stub
-	altegS := newAltegStub(t)
+	altegS = newAltegStub(t)
 	client := alteg.NewClient("token").WithBaseURL(altegS.srv.URL)
 
-	// SQLite in-memory (unique name per test to avoid cross-test collisions)
-	dbPath := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
-	store, err := storage.New(dbPath)
+	// PostgreSQL via testcontainers (fresh database per test)
+	dsn := startPostgres(t)
+	store, err := storage.New(dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 
-	n := New(client, sender, store, time.Hour /* interval not used in tests */)
-	return n, altegS, tg
+	ld := loader.New(client, store, sender, time.Hour, time.Hour)
+	nf := New(store, sender, 0)
+
+	tick = func() {
+		ld.LoadNear()
+		nf.Check()
+	}
+	return tick, altegS, tg
 }
 
-// ── tests ────────────────────────────────────────────────────────────────────
+// startPostgres spins up a throwaway Postgres container and returns its DSN.
+// The container is automatically terminated at the end of the test.
+func startPostgres(t *testing.T) string {
+	t.Helper()
+	ctx := context.Background()
+
+	container, err := tcpostgres.Run(ctx,
+		"postgres:16-alpine",
+		tcpostgres.WithDatabase("testdb"),
+		tcpostgres.WithUsername("test"),
+		tcpostgres.WithPassword("test"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second),
+		),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+	return dsn
+}
+
+// -- tests --------------------------------------------------------------------
 
 // TestPoll_FirstRun_NewActivityWithPlaces verifies that on the very first poll
 // a new activity with free places is reported as "added".
 func TestPoll_FirstRun_NewActivityWithPlaces(t *testing.T) {
-	n, altegS, tg := setupNotifier(t)
+	tick, altegS, tg := setupPipeline(t)
 
 	altegS.set([]alteg.Activity{makeActivity(1, 10, 3)}) // 7 free
-	n.poll()
+	tick()
 
 	msgs := tg.captured()
 	require.Len(t, msgs, 1, "expected exactly one Telegram message")
@@ -174,10 +217,10 @@ func TestPoll_FirstRun_NewActivityWithPlaces(t *testing.T) {
 // TestPoll_FirstRun_ActivityFullyBooked verifies that a fully-booked activity
 // on the very first poll does NOT produce any notification.
 func TestPoll_FirstRun_ActivityFullyBooked(t *testing.T) {
-	n, altegS, tg := setupNotifier(t)
+	tick, altegS, tg := setupPipeline(t)
 
 	altegS.set([]alteg.Activity{makeActivity(1, 10, 10)}) // 0 free
-	n.poll()
+	tick()
 
 	assert.Empty(t, tg.captured(), "fully-booked activity should produce no notification")
 }
@@ -185,16 +228,16 @@ func TestPoll_FirstRun_ActivityFullyBooked(t *testing.T) {
 // TestPoll_PlacesOpenUp verifies that when an activity gains free spots
 // a "new" notification is sent.
 func TestPoll_PlacesOpenUp(t *testing.T) {
-	n, altegS, tg := setupNotifier(t)
+	tick, altegS, tg := setupPipeline(t)
 
-	// First poll: activity is fully booked → no notification
+	// First poll: activity is fully booked ? no notification
 	altegS.set([]alteg.Activity{makeActivity(1, 10, 10)})
-	n.poll()
+	tick()
 	require.Empty(t, tg.captured())
 
 	// Second poll: a cancellation freed a spot
 	altegS.set([]alteg.Activity{makeActivity(1, 10, 9)})
-	n.poll()
+	tick()
 
 	msgs := tg.captured()
 	require.Len(t, msgs, 1)
@@ -204,16 +247,16 @@ func TestPoll_PlacesOpenUp(t *testing.T) {
 // TestPoll_PlacesTaken verifies that when the last free spot is taken
 // a "removed" notification is sent.
 func TestPoll_PlacesTaken(t *testing.T) {
-	n, altegS, tg := setupNotifier(t)
+	tick, altegS, tg := setupPipeline(t)
 
 	// First poll: one free spot
 	altegS.set([]alteg.Activity{makeActivity(1, 10, 9)})
-	n.poll()
+	tick()
 	require.Len(t, tg.captured(), 1) // "new" notification
 
 	// Second poll: last spot taken
 	altegS.set([]alteg.Activity{makeActivity(1, 10, 10)})
-	n.poll()
+	tick()
 
 	msgs := tg.captured()
 	require.Len(t, msgs, 2)
@@ -223,16 +266,16 @@ func TestPoll_PlacesTaken(t *testing.T) {
 // TestPoll_ActivityDisappears verifies that when an activity disappears from
 // the API while it still had free places, a "removed" notification is sent.
 func TestPoll_ActivityDisappears(t *testing.T) {
-	n, altegS, tg := setupNotifier(t)
+	tick, altegS, tg := setupPipeline(t)
 
 	// First poll: activity has free spots
 	altegS.set([]alteg.Activity{makeActivity(1, 10, 5)})
-	n.poll()
+	tick()
 	require.Len(t, tg.captured(), 1)
 
 	// Second poll: activity is gone from API
 	altegS.set([]alteg.Activity{})
-	n.poll()
+	tick()
 
 	msgs := tg.captured()
 	require.Len(t, msgs, 2)
@@ -244,21 +287,21 @@ func TestPoll_ActivityDisappears(t *testing.T) {
 // stored in the DB with free places stops coming from the API, the "removed"
 // notification is sent exactly once, not on every subsequent poll.
 func TestPoll_ActivityDisappears_NotificationOnlyOnce(t *testing.T) {
-	n, altegS, tg := setupNotifier(t)
+	tick, altegS, tg := setupPipeline(t)
 
-	// First poll: activity has free spots → "new" notification
+	// First poll: activity has free spots ? "new" notification
 	altegS.set([]alteg.Activity{makeActivity(1, 10, 5)})
-	n.poll()
+	tick()
 	require.Len(t, tg.captured(), 1)
 
-	// Second poll: activity is gone → "removed" notification
+	// Second poll: activity is gone ? "removed" notification
 	altegS.set([]alteg.Activity{})
-	n.poll()
+	tick()
 	require.Len(t, tg.captured(), 2)
 
-	// Third and fourth polls: activity still absent → no additional notifications
-	n.poll()
-	n.poll()
+	// Third and fourth polls: activity still absent ? no additional notifications
+	tick()
+	tick()
 
 	assert.Len(t, tg.captured(), 2, "removed notification must be sent only once when activity stays gone")
 }
@@ -266,14 +309,14 @@ func TestPoll_ActivityDisappears_NotificationOnlyOnce(t *testing.T) {
 // TestPoll_ActivityDisappears_WasFullyBooked verifies that when a fully-booked
 // activity disappears, no notification is sent (nothing was available anyway).
 func TestPoll_ActivityDisappears_WasFullyBooked(t *testing.T) {
-	n, altegS, tg := setupNotifier(t)
+	tick, altegS, tg := setupPipeline(t)
 
 	altegS.set([]alteg.Activity{makeActivity(1, 10, 10)})
-	n.poll()
+	tick()
 	require.Empty(t, tg.captured())
 
 	altegS.set([]alteg.Activity{})
-	n.poll()
+	tick()
 
 	assert.Empty(t, tg.captured(), "no notification expected when a fully-booked activity disappears")
 }
@@ -281,16 +324,16 @@ func TestPoll_ActivityDisappears_WasFullyBooked(t *testing.T) {
 // TestPoll_NoChanges verifies that repeated polls with identical data
 // produce no additional notifications.
 func TestPoll_NoChanges(t *testing.T) {
-	n, altegS, tg := setupNotifier(t)
+	tick, altegS, tg := setupPipeline(t)
 
 	acts := []alteg.Activity{makeActivity(1, 10, 3)}
 	altegS.set(acts)
-	n.poll()
+	tick()
 	require.Len(t, tg.captured(), 1) // initial "new" notification
 
 	// Poll again with same data
-	n.poll()
-	n.poll()
+	tick()
+	tick()
 
 	assert.Len(t, tg.captured(), 1, "no new notifications expected when nothing changed")
 }
@@ -298,10 +341,10 @@ func TestPoll_NoChanges(t *testing.T) {
 // TestPoll_APIError verifies that an API error sends an error notification
 // and does not update storage.
 func TestPoll_APIError(t *testing.T) {
-	n, altegS, tg := setupNotifier(t)
+	tick, altegS, tg := setupPipeline(t)
 
 	altegS.setStatus(http.StatusInternalServerError)
-	n.poll()
+	tick()
 
 	msgs := tg.captured()
 	require.Len(t, msgs, 1)
@@ -311,12 +354,12 @@ func TestPoll_APIError(t *testing.T) {
 // TestPoll_APIError_OnlyOnce verifies that consecutive errors produce
 // only one error notification (not repeated on every poll).
 func TestPoll_APIError_OnlyOnce(t *testing.T) {
-	n, altegS, tg := setupNotifier(t)
+	tick, altegS, tg := setupPipeline(t)
 
 	altegS.setStatus(http.StatusInternalServerError)
-	n.poll()
-	n.poll()
-	n.poll()
+	tick()
+	tick()
+	tick()
 
 	assert.Len(t, tg.captured(), 1, "error notification should be sent only once per error streak")
 }
@@ -324,17 +367,17 @@ func TestPoll_APIError_OnlyOnce(t *testing.T) {
 // TestPoll_RecoveryAfterError verifies that after a successful poll following
 // an error, normal notifications resume.
 func TestPoll_RecoveryAfterError(t *testing.T) {
-	n, altegS, tg := setupNotifier(t)
+	tick, altegS, tg := setupPipeline(t)
 
 	// First poll: error
 	altegS.setStatus(http.StatusInternalServerError)
-	n.poll()
+	tick()
 	require.Len(t, tg.captured(), 1)
 
 	// Second poll: recovered, new activity available
 	altegS.setStatus(http.StatusOK)
 	altegS.set([]alteg.Activity{makeActivity(1, 10, 5)})
-	n.poll()
+	tick()
 
 	msgs := tg.captured()
 	require.Len(t, msgs, 2)
@@ -344,14 +387,14 @@ func TestPoll_RecoveryAfterError(t *testing.T) {
 // TestPoll_MultipleActivities verifies that all relevant activities are
 // included in a single notification message.
 func TestPoll_MultipleActivities(t *testing.T) {
-	n, altegS, tg := setupNotifier(t)
+	tick, altegS, tg := setupPipeline(t)
 
 	altegS.set([]alteg.Activity{
 		makeActivity(1, 10, 3),
 		makeActivity(2, 5, 2),
-		makeActivity(3, 8, 8), // fully booked — should NOT appear
+		makeActivity(3, 8, 8), // fully booked ï¿½ should NOT appear
 	})
-	n.poll()
+	tick()
 
 	msgs := tg.captured()
 	require.Len(t, msgs, 1)
@@ -359,7 +402,7 @@ func TestPoll_MultipleActivities(t *testing.T) {
 	assert.True(t, strings.Contains(msgs[0], "New"))
 }
 
-// ── calculateDiff unit tests ─────────────────────────────────────────────────
+// -- calculateDiff unit tests -------------------------------------------------
 
 func TestCalculateDiff_NewActivityWithPlaces(t *testing.T) {
 	added, removed := calculateDiff(nil, []alteg.Activity{makeActivity(1, 10, 3)})
