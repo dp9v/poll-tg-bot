@@ -17,12 +17,10 @@ LABEL org.opencontainers.image.title="poll-tg-bot" \
       org.opencontainers.image.source="https://github.com/dp9v/go-notification-tg-bot"
 
 RUN apk add --no-cache ca-certificates \
-    && addgroup -S bot && adduser -S bot -G bot \
-    && mkdir -p /data && chown bot:bot /data
+    && addgroup -S bot && adduser -S bot -G bot
 
 COPY --from=builder /app/bot /bot
 
-VOLUME ["/data"]
 
 USER bot
 

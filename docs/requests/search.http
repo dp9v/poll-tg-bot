@@ -1,0 +1,7 @@
+﻿GET https://n1338118.alteg.io/api/v1/activity/777474/search
+    ?count=20
+    &from=2026-05-07
+    &till=2026-08-07
+    &page=1
+Content-Type: application/json
+Authorization: Bearer <token>
