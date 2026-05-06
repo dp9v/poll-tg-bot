@@ -1,0 +1,18 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="go build | short time" type="GoApplicationRunConfiguration" factoryName="Go Application">
+    <module name="poll-tg-bot" />
+    <working_directory value="$PROJECT_DIR$" />
+    <envs>
+      <env name="BEARER_TOKEN" value="gtcwf654agufy25gsadh" />
+      <env name="BOT_TOKEN" value="8370613902:AAExQcwvKzjJa2NFxlrh8oixkV9QgFwrTMY" />
+      <env name="CHAT_ID" value="102123889" />
+      <env name="DATABASE_URL" value="postgres://user:pass@localhost:5432/poll-tg-bot?sslmode=disable" />
+      <env name="NEAR_INTERVAL" value="10s" />
+    </envs>
+    <kind value="PACKAGE" />
+    <package value="go-notification-tg-bot" />
+    <directory value="$PROJECT_DIR$" />
+    <filePath value="$PROJECT_DIR$/main.go" />
+    <method v="2" />
+  </configuration>
+</component>
