@@ -124,7 +124,7 @@ func (s *altegStub) setStatus(code int) {
 func makeActivity(id, capacity, records int) alteg.Activity {
 	return alteg.Activity{
 		ID:           id,
-		Date:         "2026-04-01 10:00:00",
+		Date:         "2026-06-01 10:00:00",
 		Capacity:     capacity,
 		RecordsCount: records,
 		Staff:        alteg.Staff{ID: 1, Name: "Coach"},
