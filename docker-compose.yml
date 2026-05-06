@@ -8,6 +8,9 @@
       - CHAT_ID=${CHAT_ID}
       - BEARER_TOKEN=${BEARER_TOKEN}
       - DATABASE_URL=postgres://bot:${POSTGRES_PASSWORD:-bot}@postgres:5432/bot?sslmode=disable
+      - NEAR_INTERVAL=${NEAR_INTERVAL:-15m}
+      - LONGTERM_INTERVAL=${LONGTERM_INTERVAL:-60m}
+      - PAGE_SIZE=${PAGE_SIZE:-200}
     logging:
       driver: "json-file"
       options:
