@@ -15,7 +15,7 @@ type Config struct {
 	ChatID      int64
 	BearerToken string
 	Interval    time.Duration
-	StoragePath string
+	DatabaseURL string
 }
 
 // Load reads configuration from environment variables and returns a Config.
@@ -40,9 +40,9 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("BEARER_TOKEN environment variable is not set")
 	}
 
-	storagePath := os.Getenv("STORAGE_PATH")
-	if storagePath == "" {
-		storagePath = "/data/tgbot.db"
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		return nil, fmt.Errorf("DATABASE_URL environment variable is not set")
 	}
 
 	return &Config{
@@ -50,6 +50,6 @@ func Load() (*Config, error) {
 		ChatID:      chatID,
 		BearerToken: bearerToken,
 		Interval:    defaultInterval,
-		StoragePath: storagePath,
+		DatabaseURL: databaseURL,
 	}, nil
 }

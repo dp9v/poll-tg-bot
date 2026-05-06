@@ -25,7 +25,7 @@ func main() {
 
 	altegClient := alteg.NewClient(cfg.BearerToken)
 	sender := bot.NewSender(api, cfg.ChatID)
-	store, err := storage.New(cfg.StoragePath)
+	store, err := storage.New(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("failed to open storage: %v", err)
 	}

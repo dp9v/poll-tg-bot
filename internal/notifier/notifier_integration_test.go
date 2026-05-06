@@ -1,8 +1,8 @@
 ﻿package notifier
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +13,9 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"go-notification-tg-bot/internal/alteg"
 	"go-notification-tg-bot/internal/bot"
@@ -146,14 +149,41 @@ func setupNotifier(t *testing.T) (*Notifier, *altegStub, *tgStub) {
 	altegS := newAltegStub(t)
 	client := alteg.NewClient("token").WithBaseURL(altegS.srv.URL)
 
-	// SQLite in-memory (unique name per test to avoid cross-test collisions)
-	dbPath := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
-	store, err := storage.New(dbPath)
+	// PostgreSQL via testcontainers (fresh database per test)
+	dsn := startPostgres(t)
+	store, err := storage.New(dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 
 	n := New(client, sender, store, time.Hour /* interval not used in tests */)
 	return n, altegS, tg
+}
+
+// startPostgres spins up a throwaway Postgres container and returns its DSN.
+// The container is automatically terminated at the end of the test.
+func startPostgres(t *testing.T) string {
+	t.Helper()
+	ctx := context.Background()
+
+	container, err := tcpostgres.Run(ctx,
+		"postgres:16-alpine",
+		tcpostgres.WithDatabase("testdb"),
+		tcpostgres.WithUsername("test"),
+		tcpostgres.WithPassword("test"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second),
+		),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = container.Terminate(context.Background())
+	})
+
+	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+	return dsn
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────

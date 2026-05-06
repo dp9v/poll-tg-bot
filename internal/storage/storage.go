@@ -1,36 +1,44 @@
 ﻿package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"go-notification-tg-bot/internal/alteg"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-const defaultFilePath = "activities.db"
-
-// Storage persists activities to a SQLite database.
+// Storage persists activities to a PostgreSQL database.
 type Storage struct {
 	db *sql.DB
 }
 
-// New opens (or creates) the SQLite database at the given path and runs migrations.
-// If filePath is empty, defaultFilePath is used.
-func New(filePath string) (*Storage, error) {
-	if filePath == "" {
-		filePath = defaultFilePath
+// New opens the PostgreSQL database using the given DSN and runs migrations.
+// The DSN must be in the libpq/URL format accepted by pgx, for example:
+//
+//	postgres://user:pass@host:5432/dbname?sslmode=disable
+func New(dsn string) (*Storage, error) {
+	if dsn == "" {
+		return nil, fmt.Errorf("postgres DSN is empty")
 	}
 
-	db, err := sql.Open("sqlite", filePath)
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite db: %w", err)
+		return nil, fmt.Errorf("open postgres db: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("ping postgres db: %w", err)
 	}
 
 	if err := migrate(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("migrate sqlite db: %w", err)
+		return nil, fmt.Errorf("migrate postgres db: %w", err)
 	}
 
 	return &Storage{db: db}, nil
@@ -45,13 +53,13 @@ func (s *Storage) Close() error {
 func migrate(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS activities (
-			id            INTEGER PRIMARY KEY,
-			DATE          TEXT    NOT NULL,
+			id            BIGINT  PRIMARY KEY,
+			date          TEXT    NOT NULL,
 			capacity      INTEGER NOT NULL,
 			records_count INTEGER NOT NULL,
-			staff_id      INTEGER NOT NULL,
+			staff_id      BIGINT  NOT NULL,
 			staff_name    TEXT    NOT NULL,
-			service_id    INTEGER NOT NULL,
+			service_id    BIGINT  NOT NULL,
 			service_title TEXT    NOT NULL
 		)
 	`)
@@ -71,15 +79,15 @@ func (s *Storage) Save(activities []alteg.Activity) error {
 
 	stmt, err := tx.Prepare(`
 		INSERT INTO activities (id, date, capacity, records_count, staff_id, staff_name, service_id, service_title)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			DATE          = excluded.date,
-			capacity      = excluded.capacity,
-			records_count = excluded.records_count,
-			staff_id      = excluded.staff_id,
-			staff_name    = excluded.staff_name,
-			service_id    = excluded.service_id,
-			service_title = excluded.service_title
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (id) DO UPDATE SET
+			date          = EXCLUDED.date,
+			capacity      = EXCLUDED.capacity,
+			records_count = EXCLUDED.records_count,
+			staff_id      = EXCLUDED.staff_id,
+			staff_name    = EXCLUDED.staff_name,
+			service_id    = EXCLUDED.service_id,
+			service_title = EXCLUDED.service_title
 	`)
 	if err != nil {
 		return err
@@ -104,10 +112,10 @@ func (s *Storage) Save(activities []alteg.Activity) error {
 func (s *Storage) LoadBetween(from, to time.Time) ([]alteg.Activity, error) {
 	const layout = "2006-01-02 15:04:05"
 	rows, err := s.db.Query(`
-		SELECT id, DATE, capacity, records_count, staff_id, staff_name, service_id, service_title
+		SELECT id, date, capacity, records_count, staff_id, staff_name, service_id, service_title
 		FROM activities
-		WHERE DATE >= ? AND DATE <= ?
-		ORDER BY DATE
+		WHERE date >= $1 AND date <= $2
+		ORDER BY date
 	`, from.Format(layout), to.Format(layout))
 	if err != nil {
 		return nil, err
@@ -118,9 +126,9 @@ func (s *Storage) LoadBetween(from, to time.Time) ([]alteg.Activity, error) {
 // Load returns all activities currently stored in the database.
 func (s *Storage) Load() ([]alteg.Activity, error) {
 	rows, err := s.db.Query(`
-		SELECT id, DATE, capacity, records_count, staff_id, staff_name, service_id, service_title
+		SELECT id, date, capacity, records_count, staff_id, staff_name, service_id, service_title
 		FROM activities
-		ORDER BY DATE
+		ORDER BY date
 	`)
 	if err != nil {
 		return nil, err

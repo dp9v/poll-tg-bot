@@ -6,7 +6,7 @@ A Telegram bot that polls the [Alteg](https://alteg.io) platform every 5 minutes
 
 - Polls Alteg activity API on a configurable interval (default: 5 min)
 - Sends a Telegram message only when availability changes (new slots or capacity updates)
-- Stores activity history in a local SQLite database that survives restarts
+- Stores activity history in a PostgreSQL database that survives restarts
 - Requests a new Alteg bearer token via Telegram when the current one expires
 - Multi-arch Docker image (`linux/amd64`, `linux/arm64`)
 
@@ -22,7 +22,7 @@ A Telegram bot that polls the [Alteg](https://alteg.io) platform every 5 minutes
 │   ├── bot/         # Telegram bot (sender + token dialog)
 │   ├── config/      # Environment-based config
 │   ├── notifier/    # Polling loop & diff logic
-│   └── storage/     # SQLite persistence
+│   └── storage/     # PostgreSQL persistence
 └── docs/
     ├── deploy.md    # Deploy & push instructions
     └── requirements/
@@ -45,10 +45,11 @@ A Telegram bot that polls the [Alteg](https://alteg.io) platform every 5 minutes
 
 ## Environment variables
 
-| Variable       | Description                              |
-|----------------|------------------------------------------|
-| `BOT_TOKEN`    | Telegram bot token from @BotFather       |
-| `CHAT_ID`      | Telegram chat ID to send notifications   |
-| `BEARER_TOKEN` | Alteg bearer token (can be updated live) |
-| `STORAGE_PATH` | Path to the SQLite database file         |
+| Variable            | Description                                                                                  |
+|---------------------|----------------------------------------------------------------------------------------------|
+| `BOT_TOKEN`         | Telegram bot token from @BotFather                                                           |
+| `CHAT_ID`           | Telegram chat ID to send notifications                                                       |
+| `BEARER_TOKEN`      | Alteg bearer token (can be updated live)                                                     |
+| `DATABASE_URL`      | PostgreSQL DSN, e.g. `postgres://user:pass@host:5432/dbname?sslmode=disable`                 |
+| `POSTGRES_PASSWORD` | (docker-compose only) password for the bundled `postgres` service. Defaults to `bot`.        |
 
