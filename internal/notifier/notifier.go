@@ -70,16 +70,19 @@ func (n *Notifier) Run() {
 func (n *Notifier) ListenCommands() {
 	n.sender.ListenCommands(func() ([]alteg.Activity, error) {
 		from, till := timewindow.Near(time.Now())
-		return n.storage.LoadBetween(from, till)
+		return n.storage.LoadBetweenForService(from, till, trackedServiceID)
 	})
 }
+
+// trackedServiceID is the hardcoded service ID that the notifier monitors.
+const trackedServiceID = 12995896
 
 // Check loads the current near-window state from the cache, computes the diff
 // against the in-memory baseline, sends Telegram notifications about any
 // changes and finally updates the baseline. Exposed primarily for tests.
 func (n *Notifier) Check() {
 	from, till := timewindow.Near(time.Now())
-	current, err := n.storage.LoadBetween(from, till)
+	current, err := n.storage.LoadBetweenForService(from, till, trackedServiceID)
 	if err != nil {
 		log.Printf("notifier: could not load activities from storage: %v", err)
 		return
@@ -110,7 +113,7 @@ func (n *Notifier) seedBaseline() {
 		return
 	}
 	from, till := timewindow.Near(time.Now())
-	saved, err := n.storage.LoadBetween(from, till)
+	saved, err := n.storage.LoadBetweenForService(from, till, trackedServiceID)
 	if err != nil {
 		log.Printf("notifier: warning — could not seed baseline from storage: %v", err)
 		return

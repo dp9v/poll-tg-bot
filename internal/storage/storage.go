@@ -292,6 +292,20 @@ func (s *Storage) LoadBetween(from, to time.Time) ([]alteg.Activity, error) {
 	return scanActivities(rows)
 }
 
+// LoadBetweenForService returns activities for a specific service whose date
+// falls within [from, to] (inclusive).
+func (s *Storage) LoadBetweenForService(from, to time.Time, serviceID int) ([]alteg.Activity, error) {
+	const layout = "2006-01-02 15:04:05"
+	rows, err := s.db.Query(selectActivitiesSQL+`
+		WHERE a.date >= $1 AND a.date <= $2 AND a.service_id = $3
+		ORDER BY a.date
+	`, from.Format(layout), to.Format(layout), serviceID)
+	if err != nil {
+		return nil, err
+	}
+	return scanActivities(rows)
+}
+
 // Load returns all activities currently stored in the database.
 func (s *Storage) Load() ([]alteg.Activity, error) {
 	rows, err := s.db.Query(selectActivitiesSQL + ` ORDER BY a.date`)
