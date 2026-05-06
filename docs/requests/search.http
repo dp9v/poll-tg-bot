@@ -4,4 +4,4 @@
     &till=2026-08-07
     &page=1
 Content-Type: application/json
-Authorization: Bearer gtcwf654agufy25gsadh, User 34087f42ff2fe2f1ced55272fb596b93
+Authorization: Bearer <token>
